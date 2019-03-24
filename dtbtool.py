@@ -13,35 +13,44 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Creates a master dtbimage in the QCDT format.
+
+Create header with magic, dtb version and dtb count.
+Add chips index
+Append dtb images
+"""
+
 from argparse import ArgumentParser, FileType
 from struct import pack
 import os
 import re
 import subprocess
 
-QCDT_MAGIC   = "QCDT"  # Master DTB magic
+QCDT_MAGIC = "QCDT"    # Master DTB magic
 QCDT_VERSION = 3       # QCDT version
 
-QCDT_DT_TAG    = "qcom,msm-id = <"
+QCDT_DT_TAG = "qcom,msm-id = <"
 QCDT_BOARD_TAG = "qcom,board-id = <"
-QCDT_PMIC_TAG  = "qcom,pmic-id = <"
+QCDT_PMIC_TAG = "qcom,pmic-id = <"
 
 
 PAGE_SIZE_DEF = 2048
 PAGE_SIZE_MAX = 1024 * 1024
 
-dt_version = 1
-dtb_list = []
-chip_list = []
+_dt_version = 1
+_dtb_list = []
+_chip_list = []
 
-class Dtb:
+class Dtb(object):
+    """Used to store dtb infos"""
     def __init__(self, path, size):
         self.path = path
         self.size = size
         self.offset = 0
 
 
-class Chip:
+class Chip(object):
+    """Used to store chip infos"""
     def __init__(self, chipset=0, platform=0, subtype=0, rev_num=0,
                  pmic_model0=0, pmic_model1=0, pmic_model2=0, pmic_model3=0):
         self.chipset = chipset
@@ -56,24 +65,29 @@ class Chip:
 
     @classmethod
     def create_v1(cls, chipset, platform, rev_num):
+        """Create a v1 chip object"""
         return cls(chipset, platform, 0, rev_num)
 
     @classmethod
     def create_v2(cls, chipset, rev_num, platform, subtype):
+        """Create a v2 chip object"""
         return cls(chipset, platform, subtype, rev_num)
 
     @classmethod
     def create_v3(cls, chipset, rev_num, platform, subtype,
-                 pmic_model0, pmic_model1, pmic_model2, pmic_model3):
+                  pmic_model0, pmic_model1, pmic_model2, pmic_model3):
+        """Create a v3 chip object"""
         return cls(chipset, platform, subtype, rev_num,
-                 pmic_model0, pmic_model1, pmic_model2, pmic_model3)
+                   pmic_model0, pmic_model1, pmic_model2, pmic_model3)
 
 
 def get_dts_data(filename, args):
+    """Converts dtb to dts"""
     cmdline = args.dtc_path + 'dtc -I dtb -O dts ' + filename
     return subprocess.check_output(cmdline, shell=True)
 
 def get_version_info(filename, args):
+    """Returns QCDT version of the dtb"""
     version = 1
     dts = get_dts_data(filename, args)
 
@@ -88,32 +102,34 @@ def get_version_info(filename, args):
     return version
 
 def get_chip_data(line, sublen):
+    """Common function chip infos extraction"""
     retlist = []
 
     str_data = re.search('<(.+?)>', line.strip()).group(1)
     data = str_data.split()
 
     pos = 0
-    itemList = []
+    item_list = []
     for item in data:
         value = int(item, 16)
-        itemList.append(value)
+        item_list.append(value)
         pos += 1
 
         if pos == sublen:
-            retlist.append(itemList)
+            retlist.append(item_list)
             pos = 0
-            itemList = []
+            item_list = []
 
     return retlist
 
 def get_chip_info(filename, msmversion, args):
+    """Extracts chips infos in a sigle dtb image"""
     dts = get_dts_data(filename, args)
 
     if dts is None:
         return None
 
-    listChip = []
+    list_chip = []
 
     cpr_data = []
     cr_data = []
@@ -138,18 +154,18 @@ def get_chip_info(filename, msmversion, args):
     if msmversion == 1:
 
         if not cpr_data:
-            print("... skip, incorrect '%s' format" % dt_tag)
+            print("... skip, incorrect '%s' format" % args.dt_tag)
             return None
 
         for cpr in cpr_data:
             chip = Chip.create_v1(cpr[0], cpr[1], cpr[2])
-            listChip.append(chip)
+            list_chip.append(chip)
 
-        return listChip
+        return list_chip
 
 
     if not cr_data:
-        print("... skip, incorrect '%s' format" % dt_tag)
+        print("... skip, incorrect '%s' format" % args.dt_tag)
         return None
 
     if not ps_data:
@@ -167,39 +183,41 @@ def get_chip_info(filename, msmversion, args):
                     chip = Chip.create_v3(chipset_rev[0], chipset_rev[1],
                                           platform_subtype[0], platform_subtype[1],
                                           pmic[0], pmic[1], pmic[2], pmic[3])
-                    listChip.append(chip)
+                    list_chip.append(chip)
             else:
                 chip = Chip.create_v2(chipset_rev[0], chipset_rev[1],
                                       platform_subtype[0], platform_subtype[1])
-                listChip.append(chip)
+                list_chip.append(chip)
 
-    return listChip
+    return list_chip
 
 def chip_add(chip):
-    global chip_list
+    """Adds a new chip to the list if does not exist already"""
+    global _chip_list
 
-    if chip_list:
+    if _chip_list:
         exists = any(chip.chipset == item.chipset and
-            chip.platform == item.platform and
-            chip.subtype == item.subtype and
-            chip.rev_num == item.rev_num and
-            chip.pmic_model0 == item.pmic_model0 and
-            chip.pmic_model1 == item.pmic_model1 and
-            chip.pmic_model2 == item.pmic_model2 and
-            chip.pmic_model3 == item.pmic_model3 for item in chip_list)
+                     chip.platform == item.platform and
+                     chip.subtype == item.subtype and
+                     chip.rev_num == item.rev_num and
+                     chip.pmic_model0 == item.pmic_model0 and
+                     chip.pmic_model1 == item.pmic_model1 and
+                     chip.pmic_model2 == item.pmic_model2 and
+                     chip.pmic_model3 == item.pmic_model3 for item in _chip_list)
 
         if exists:
             # Duplicated
             return False
 
-    chip_list.append(chip)
+    _chip_list.append(chip)
     return True
 
 def find_dtb(path, args):
+    """Search for dtbs in the provided folder and subfolders and returns count(chips)"""
     dtb_count = 0
 
     for entry in os.listdir(path):
-        entry_path = os.path.join(path,entry)
+        entry_path = os.path.join(path, entry)
         if os.path.isdir(entry_path):
             print("Searching subdir: %s ..." % entry_path)
             dtb_count += find_dtb(entry_path, args)
@@ -212,15 +230,16 @@ def find_dtb(path, args):
     return dtb_count
 
 def process_dtb(entry_path, filename, args):
-    global dt_version
-    global dtb_list
+    """Collects chips infos in a sigle dtb and returns count(chips)"""
+    global _dt_version
+    global _dtb_list
 
     dtb_count = 0
 
     # Identify the version number
     msmversion = get_version_info(entry_path, args)
-    if dt_version < msmversion:
-        dt_version = msmversion
+    if _dt_version < msmversion:
+        _dt_version = msmversion
 
     chiplist = get_chip_info(entry_path, msmversion, args)
 
@@ -234,7 +253,8 @@ def process_dtb(entry_path, filename, args):
             return
     if msmversion == 3:
         if not chiplist:
-            print("skip, failed to scan for %s, %s or %s tag" % (args.dt_tag, QCDT_BOARD_TAG, QCDT_PMIC_TAG))
+            print("skip, failed to scan for %s, %s or %s tag" %
+                  (args.dt_tag, QCDT_BOARD_TAG, QCDT_PMIC_TAG))
             return
 
     size = os.stat(entry_path).st_size
@@ -242,16 +262,16 @@ def process_dtb(entry_path, filename, args):
         print("skip, failed to get DTB size")
         return
 
-    # Store every DTB size and path to dtb_list
+    # Store every DTB size and path to _dtb_list
     dtb_size = size + (args.page_size - (size % args.page_size))
 
     dtb = Dtb(entry_path, dtb_size)
-    dtb_list.append(dtb)
+    _dtb_list.append(dtb)
 
     for chip in chiplist:
-        print("chipset: %u, rev: %u, platform: %u, subtype: %u, pmic0: %u, pmic1: %u, pmic2: %u, pmic3: %u"
-                % (chip.chipset, chip.rev_num, chip.platform, chip.subtype,
-                    chip.pmic_model0, chip.pmic_model1, chip.pmic_model2, chip.pmic_model3))
+        print("chipset: %u, rev: %u, platform: %u, subtype: %u, pmic0: %u, pmic1: %u, pmic2: %u, pmic3: %u" %
+              (chip.chipset, chip.rev_num, chip.platform, chip.subtype,
+               chip.pmic_model0, chip.pmic_model1, chip.pmic_model2, chip.pmic_model3))
 
         # Add a reference to the DTB
         chip.dtb_file = filename
@@ -266,6 +286,7 @@ def process_dtb(entry_path, filename, args):
     return dtb_count
 
 def parse_cmdline():
+    """parse command line arguments"""
     parser = ArgumentParser(
         description="dtbTool version " + str(QCDT_VERSION))
     parser.add_argument("input_dir",
@@ -285,6 +306,7 @@ def parse_cmdline():
     return parser.parse_args()
 
 def validate_args(args):
+    """validate command line arguments"""
     if args.page_size <= 0 or args.page_size > PAGE_SIZE_MAX:
         raise ValueError("Invalid page size (must be > 0 and <=1MB")
 
@@ -305,9 +327,9 @@ def validate_args(args):
 #         z  = soc rev
 #
 def main():
-    global chip_list
-    global dtb_list
-    global dt_version
+    global _chip_list
+    global _dtb_list
+    global _dt_version
 
     args = parse_cmdline()
     validate_args(args)
@@ -328,13 +350,13 @@ def main():
 
     # Override dt version if specified
     if args.force_v2:
-        dt_version = 2
+        _dt_version = 2
     elif args.force_v3:
-        dt_version = 3
+        _dt_version = 3
 
-    if dt_version == 1:
+    if _dt_version == 1:
         entry_size = 20
-    elif dt_version == 2:
+    elif _dt_version == 2:
         entry_size = 24
     else:
         entry_size = 40
@@ -344,19 +366,20 @@ def main():
     dtb_offset = 12 + (entry_size * dtb_count) + 4
 
     # Round up to page size
-    padding = args.page_size - (dtb_offset % args.page_size);
-    dtb_offset += padding;
-    expected = dtb_offset;
+    padding = args.page_size - (dtb_offset % args.page_size)
+    dtb_offset += padding
+    expected = dtb_offset
 
     # Write the header
     args.output_file.write(pack('4s', QCDT_MAGIC.encode()))
-    args.output_file.write(pack('I', dt_version))
+    args.output_file.write(pack('I', _dt_version))
     args.output_file.write(pack('I', dtb_count))
 
     dtb_ordered_list = []
 
     # Order chip list by chipset -> platform -> subtype -> rev_num
-    chip_list = sorted(chip_list, key = lambda item: (item.chipset, item.platform, item.subtype, item.rev_num))
+    _chip_list = sorted(_chip_list, key=lambda item:
+                        (item.chipset, item.platform, item.subtype, item.rev_num))
 
     # For each chip write the following index table:
     # +-----------------+
@@ -381,25 +404,25 @@ def main():
     # | dtb size        |
     # +-----------------+
 
-    for chip in chip_list:
+    for chip in _chip_list:
         args.output_file.write(pack('I', chip.chipset))
         args.output_file.write(pack('I', chip.platform))
 
-        if dt_version >= 2:
+        if _dt_version >= 2:
             args.output_file.write(pack('I', chip.subtype))
 
         args.output_file.write(pack('I', chip.rev_num))
 
-        if dt_version >= 3:
+        if _dt_version >= 3:
             args.output_file.write(pack('4I',
-                chip.pmic_model0,
-                chip.pmic_model1,
-                chip.pmic_model2,
-                chip.pmic_model3))
+                                        chip.pmic_model0,
+                                        chip.pmic_model1,
+                                        chip.pmic_model2,
+                                        chip.pmic_model3))
 
         indexed_dtb = next((item for item in dtb_ordered_list if chip.dtb_file in item.path), None)
         if not indexed_dtb:
-            dtb = next((item for item in dtb_list if chip.dtb_file in item.path), None)
+            dtb = next((item for item in _dtb_list if chip.dtb_file in item.path), None)
             if not dtb:
                 raise ValueError("DTB not found")
 
@@ -430,7 +453,7 @@ def main():
         size = len(content) + padding
         if size != dtb.size:
             raise ValueError("DTB size mismatch, please re-run: expected %d vs actual %d (%s)" %
-                        (dtb.size, size, dtb.path))
+                             (dtb.size, size, dtb.path))
 
         if padding > 0:
             args.output_file.write(pack('%dx' % padding))

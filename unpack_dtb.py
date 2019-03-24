@@ -13,12 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""unpacks the QCDT dtimage.
+
+Print header and chip infos. Extracts dtb images.
+"""
+
 from argparse import ArgumentParser, FileType
 from struct import unpack
 import os
 
 
-class Dtb:
+class Dtb(object):
+    """used to store infos of each dtb image"""
     def __init__(self, name, size, offset):
         self.name = name
         self.size = size
@@ -37,6 +43,7 @@ def extract_image(offset, size, dtbimage, extracted_image_name):
         file_out.write(dtbimage.read(size))
 
 def add_unique_dtb(dtb_list, dtb):
+    """adds a dtb to the list if it was not added before"""
     if dtb_list:
         exists = any(item.offset == dtb.offset for item in dtb_list)
         if exists:
@@ -46,6 +53,7 @@ def add_unique_dtb(dtb_list, dtb):
     return True
 
 def unpack_dtb(args):
+    """Print header and chip infos. Extracts dtb images."""
     qcdt_magic = unpack('4s', args.dtb.read(4))
     print('QCDT magic: %s' % qcdt_magic)
 
@@ -67,24 +75,25 @@ def unpack_dtb(args):
         if version >= 2:
             subtype = unpack('I', args.dtb.read(4))
 
-        revNum = unpack('I', args.dtb.read(4))
+        rev_num = unpack('I', args.dtb.read(4))
 
         if version >= 2:
-            print(' chipset: %s platform: %s subtype: %s revNum: %s' % (chipset[0], platform[0], subtype[0], revNum[0]))
+            print(' chipset: %s platform: %s subtype: %s revNum: %s' %
+                  (chipset[0], platform[0], subtype[0], rev_num[0]))
         else:
-            print(' chipset: %s platform: %s revNum: %s' % (chipset[0], platform[0], revNum[0]))
+            print(' chipset: %s platform: %s revNum: %s' % (chipset[0], platform[0], rev_num[0]))
 
         if version >= 3:
             pmic = unpack('4I', args.dtb.read(4 * 4))
             print(' pmic0: %s pmic1: %s pmic2: %s pmic3: %s' % (pmic[0], pmic[1], pmic[2], pmic[3]))
 
-        dtbOffset = unpack('I', args.dtb.read(4))
-        dtbSize = unpack('I', args.dtb.read(4))
-        print(' dtb offset: %s dtb size: %s' % (dtbOffset[0], dtbSize[0]))
+        dtb_offset = unpack('I', args.dtb.read(4))
+        dtb_size = unpack('I', args.dtb.read(4))
+        print(' dtb offset: %s dtb size: %s' % (dtb_offset[0], dtb_size[0]))
 
         if not args.print_only:
             name_suff = len(dtb_list) + 1
-            dtb = Dtb("dtb_%d.dtb" % name_suff, dtbSize[0], dtbOffset[0])
+            dtb = Dtb('dtb_%d.dtb' % name_suff, dtb_size[0], dtb_offset[0])
             add_unique_dtb(dtb_list, dtb)
 
     if args.print_only:
@@ -98,15 +107,17 @@ def unpack_dtb(args):
 
 
 def parse_cmdline():
+    """parse command line arguments"""
     parser = ArgumentParser(description='Unpacks QCDT format dtb')
-    parser.add_argument("--dtb", type=FileType('rb'), required=True,
-                        help="Input dtb")
-    parser.add_argument("-p",'--print-only', action='store_true',
+    parser.add_argument('--dtb', type=FileType('rb'), required=True,
+                        help='Input dtb')
+    parser.add_argument('-p', '--print-only', action='store_true',
                         help='Only print the structure without extracting dtbs')
-    parser.add_argument("-o",'--out', help='path to out dtbs', default='out')
+    parser.add_argument('-o', '--out', help='path to out dtbs', default='out')
     return parser.parse_args()
 
 def main():
+    """parse arguments and unpack dt image"""
     args = parse_cmdline()
 
     if not args.print_only:
