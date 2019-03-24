@@ -17,6 +17,14 @@ from argparse import ArgumentParser, FileType
 from struct import unpack
 import os
 
+
+class Dtb:
+    def __init__(self, name, size, offset):
+        self.name = name
+        self.size = size
+        self.offset = offset
+
+
 def create_out_dir(dir_path):
     """creates a directory 'dir_path' if it does not exist"""
     if not os.path.exists(dir_path):
@@ -30,7 +38,7 @@ def extract_image(offset, size, dtbimage, extracted_image_name):
 
 def add_unique_dtb(dtb_list, dtb):
     if dtb_list:
-        exists = any(item["offset"] == dtb["offset"] for item in dtb_list)
+        exists = any(item.offset == dtb.offset for item in dtb_list)
         if exists:
             return False
 
@@ -76,7 +84,7 @@ def unpack_dtb(args):
 
         if not args.print_only:
             name_suff = len(dtb_list) + 1
-            dtb = {"size": dtbSize[0], "offset": dtbOffset[0], "name": "dtb_%d.dtb" % name_suff}
+            dtb = Dtb("dtb_%d.dtb" % name_suff, dtbSize[0], dtbOffset[0])
             add_unique_dtb(dtb_list, dtb)
 
     if args.print_only:
@@ -84,9 +92,9 @@ def unpack_dtb(args):
 
     print("")
     for dtb in dtb_list:
-        print("Extracting %s..." % dtb["name"])
-        extract_image(dtb["offset"], dtb["size"], args.dtb,
-                      os.path.join(args.out, dtb["name"]))
+        print("Extracting %s..." % dtb.name)
+        extract_image(dtb.offset, dtb.size, args.dtb,
+                      os.path.join(args.out, dtb.name))
 
 
 def parse_cmdline():
