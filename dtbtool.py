@@ -102,14 +102,24 @@ def get_version_info(filename, args):
     return version
 
 def get_chip_data(line, sublen):
-    """Common function chip infos extraction"""
+    """Returns an array of arrays of integers. The position of each integer
+    will decide whether that value is the platform, rev num..., according to the dt version.
+    A single dtb could apply to more than one chip though.
+    That's why we need to check each array length and return an array of arrays"""
+
     retlist = []
 
+    # Given a line extract the content between "<" and ">"
     str_data = re.search('<(.+?)>', line.strip()).group(1)
+
+    # Create an array of values delimited by a whitespace
     data = str_data.split()
 
     pos = 0
     item_list = []
+
+    # Convert each value into an integer and
+    # create sub-arrays of the given length
     for item in data:
         value = int(item, 16)
         item_list.append(value)
@@ -136,6 +146,7 @@ def get_chip_info(filename, msmversion, args):
     ps_data = []
     pmic_data = []
 
+    # Extract data according to the dt version
     for line in dts.split("\n"):
         if msmversion == 1:
             if args.dt_tag in line:
@@ -176,6 +187,8 @@ def get_chip_info(filename, msmversion, args):
         print("... skip, incorrect '%s' format" % QCDT_PMIC_TAG)
         return None
 
+    # Combine chipset, revision, platform, subtype and
+    # pmic data to create unique chip entries
     for chipset_rev in cr_data:
         for platform_subtype in ps_data:
             if msmversion == 3:
@@ -257,14 +270,16 @@ def process_dtb(entry_path, filename, args):
                   (args.dt_tag, QCDT_BOARD_TAG, QCDT_PMIC_TAG))
             return
 
+    # Retrieve dtb size
     size = os.stat(entry_path).st_size
     if size == 0:
         print("skip, failed to get DTB size")
         return
 
-    # Store every DTB size and path to _dtb_list
+    # Calculate dtb padded size
     dtb_size = size + (args.page_size - (size % args.page_size))
 
+    # Store every DTB size and path to _dtb_list
     dtb = Dtb(entry_path, dtb_size)
     _dtb_list.append(dtb)
 
@@ -376,20 +391,29 @@ def write_index_table(args, chip_list, dt_version, next_dtb_offset):
                                         chip.pmic_model2,
                                         chip.pmic_model3))
 
+        # Search linked dtb in the indexed dtb list (only write a single dtb once)
         indexed_dtb = next((item for item in dtb_ordered_list if chip.dtb_file in item.path), None)
         if not indexed_dtb:
+            # Not found, search in dtb list
             dtb = next((item for item in _dtb_list if chip.dtb_file in item.path), None)
             if not dtb:
+                # Not found, kinda impossible, where did this chip came from?
                 raise ValueError("DTB not found")
 
-            args.output_file.write(pack('I', next_dtb_offset))
+            # Set dtb offset
+            dtb.offset = next_dtb_offset
+
+            # Write linked dtb data
+            args.output_file.write(pack('I', dtb.offset))
             args.output_file.write(pack('I', dtb.size))
 
-            dtb.offset = next_dtb_offset
+            # Update offset for the next dtb
             next_dtb_offset += dtb.size
 
+            # Add indexed dtb to the list
             dtb_ordered_list.append(dtb)
         else:
+            # Found, point to previously indexed dtb
             args.output_file.write(pack('I', indexed_dtb.offset))
             args.output_file.write(pack('I', indexed_dtb.size))
 
