@@ -441,6 +441,8 @@ def write_data(args, dtb_count):
     padding = args.page_size - (dtb_offset % args.page_size)
     dtb_offset += padding
 
+    print(" Writing header...")
+
     # Write the header
     args.output_file.write(pack('4s', QCDT_MAGIC.encode()))
     args.output_file.write(pack('I', dt_version))
@@ -450,11 +452,15 @@ def write_data(args, dtb_count):
     chip_list = sorted(_chip_list, key=lambda item:
                        (item.chipset, item.platform, item.subtype, item.rev_num))
 
+    print(" Writing chip index table...")
+
     # Write chip index table
     dtb_ordered_list = write_index_table(args, chip_list, dt_version, dtb_offset)
 
     # end of table indicator
     args.output_file.write(pack('I', 0))
+
+    print(" Appending DTB images...")
 
     # Write padding for the first DTB
     write_padding(args, padding)
@@ -495,7 +501,7 @@ def main():
 
     write_data(args, dtb_count)
 
-    print("Master DTB created")
+    print("Done")
 
 if __name__ == '__main__':
     main()
