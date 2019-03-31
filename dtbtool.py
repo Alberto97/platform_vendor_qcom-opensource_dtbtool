@@ -313,6 +313,155 @@ def validate_args(args):
     if args.force_v2 and args.force_v3:
         raise ValueError("A version output argument may only be passed once")
 
+def override_dt_version(args, dt_version):
+    """Overrides dt version if requested"""
+    if args.force_v2:
+        return 2
+    elif args.force_v3:
+        return 3
+    else:
+        return dt_version
+
+def get_entry_size(dt_version):
+    """Returns the entry size according to the dt version"""
+    if dt_version == 1:
+        return 20
+    elif dt_version == 2:
+        return 24
+    else:
+        return 40
+
+
+# Chip index table:
+# +-----------------+
+# | chipset         |
+# +-----------------+
+# | platform        |
+# +-----------------+
+# | subtype         | v2/v3 only
+# +-----------------+
+# | soc rev         |
+# +-----------------+
+# | pmic model0     | v3 only
+# +-----------------+
+# | pmic model1     | v3 only
+# +-----------------+
+# | pmic model2     | v3 only
+# +-----------------+
+# | pmic model3     | v3 only
+# +-----------------+
+# | dtb offset      |
+# +-----------------+
+# | dtb size        |
+# +-----------------+
+#
+def write_index_table(args, chip_list, dt_version, next_dtb_offset):
+    """For each chip write its index table"""
+    global _dtb_list
+    dtb_ordered_list = []
+
+    for chip in chip_list:
+        args.output_file.write(pack('I', chip.chipset))
+        args.output_file.write(pack('I', chip.platform))
+
+        if dt_version >= 2:
+            args.output_file.write(pack('I', chip.subtype))
+
+        args.output_file.write(pack('I', chip.rev_num))
+
+        if dt_version >= 3:
+            args.output_file.write(pack('4I',
+                                        chip.pmic_model0,
+                                        chip.pmic_model1,
+                                        chip.pmic_model2,
+                                        chip.pmic_model3))
+
+        indexed_dtb = next((item for item in dtb_ordered_list if chip.dtb_file in item.path), None)
+        if not indexed_dtb:
+            dtb = next((item for item in _dtb_list if chip.dtb_file in item.path), None)
+            if not dtb:
+                raise ValueError("DTB not found")
+
+            args.output_file.write(pack('I', next_dtb_offset))
+            args.output_file.write(pack('I', dtb.size))
+
+            dtb.offset = next_dtb_offset
+            next_dtb_offset += dtb.size
+
+            dtb_ordered_list.append(dtb)
+        else:
+            args.output_file.write(pack('I', indexed_dtb.offset))
+            args.output_file.write(pack('I', indexed_dtb.size))
+
+    return dtb_ordered_list
+
+
+def write_dtb_data(args, dtb_ordered_list):
+    """Write dtb data"""
+    for dtb in dtb_ordered_list:
+        # Read DTB
+        with open(dtb.path, "rb") as dtblob:
+            content = dtblob.read()
+
+        # Append DTB content
+        args.output_file.write(content)
+
+        # Calculate padding
+        padding = args.page_size - (len(content) % args.page_size)
+
+        # Previously calculated size (dtb.size) must match with DTB content + padding
+        size = len(content) + padding
+        if size != dtb.size:
+            raise ValueError("DTB size mismatch, please re-run: expected %d vs actual %d (%s)" %
+                             (dtb.size, size, dtb.path))
+        # Write padding
+        write_padding(args, padding)
+
+def write_padding(args, padding):
+    """Write variable length for next DTB to start on page boundary"""
+    if padding > 0:
+        args.output_file.write(pack('%dx' % padding))
+
+def write_data(args, dtb_count):
+    """Write header + chip index table + dtb with relative paddings"""
+    global _chip_list
+    global _dt_version
+
+    # Override DT version if requested
+    dt_version = override_dt_version(args, _dt_version)
+
+    # Get entry size
+    entry_size = get_entry_size(dt_version)
+
+    # Calculate offset of first DTB block
+    # header size + DTB table entries + end of table indicator
+    dtb_offset = 12 + (entry_size * dtb_count) + 4
+
+    # Round up to page size
+    padding = args.page_size - (dtb_offset % args.page_size)
+    dtb_offset += padding
+
+    # Write the header
+    args.output_file.write(pack('4s', QCDT_MAGIC.encode()))
+    args.output_file.write(pack('I', dt_version))
+    args.output_file.write(pack('I', dtb_count))
+
+    # Order chip list by chipset -> platform -> subtype -> rev_num
+    chip_list = sorted(_chip_list, key=lambda item:
+                       (item.chipset, item.platform, item.subtype, item.rev_num))
+
+    # Write chip index table
+    dtb_ordered_list = write_index_table(args, chip_list, dt_version, dtb_offset)
+
+    # end of table indicator
+    args.output_file.write(pack('I', 0))
+
+    # Write padding for the first DTB
+    write_padding(args, padding)
+
+    # Write DTBs
+    write_dtb_data(args, dtb_ordered_list)
+
 #
 # Extract 'qcom,msm-id' 'qcom,board-id' parameter from DTB
 #     v1 format:
@@ -327,10 +476,6 @@ def validate_args(args):
 #         z  = soc rev
 #
 def main():
-    global _chip_list
-    global _dtb_list
-    global _dt_version
-
     args = parse_cmdline()
     validate_args(args)
 
@@ -348,117 +493,9 @@ def main():
 
     print("Generating master DTB... ")
 
-    # Override dt version if specified
-    if args.force_v2:
-        _dt_version = 2
-    elif args.force_v3:
-        _dt_version = 3
+    write_data(args, dtb_count)
 
-    if _dt_version == 1:
-        entry_size = 20
-    elif _dt_version == 2:
-        entry_size = 24
-    else:
-        entry_size = 40
-
-    # Calculate offset of first DTB block
-    # header size + DTB table entries + end of table indicator
-    dtb_offset = 12 + (entry_size * dtb_count) + 4
-
-    # Round up to page size
-    padding = args.page_size - (dtb_offset % args.page_size)
-    dtb_offset += padding
-    expected = dtb_offset
-
-    # Write the header
-    args.output_file.write(pack('4s', QCDT_MAGIC.encode()))
-    args.output_file.write(pack('I', _dt_version))
-    args.output_file.write(pack('I', dtb_count))
-
-    dtb_ordered_list = []
-
-    # Order chip list by chipset -> platform -> subtype -> rev_num
-    _chip_list = sorted(_chip_list, key=lambda item:
-                        (item.chipset, item.platform, item.subtype, item.rev_num))
-
-    # For each chip write the following index table:
-    # +-----------------+
-    # | chipset         |
-    # +-----------------+
-    # | platform        |
-    # +-----------------+
-    # | subtype         | v2/v3 only
-    # +-----------------+
-    # | soc rev         |
-    # +-----------------+
-    # | pmic model0     | v3 only
-    # +-----------------+
-    # | pmic model1     | v3 only
-    # +-----------------+
-    # | pmic model2     | v3 only
-    # +-----------------+
-    # | pmic model3     | v3 only
-    # +-----------------+
-    # | dtb offset      |
-    # +-----------------+
-    # | dtb size        |
-    # +-----------------+
-
-    for chip in _chip_list:
-        args.output_file.write(pack('I', chip.chipset))
-        args.output_file.write(pack('I', chip.platform))
-
-        if _dt_version >= 2:
-            args.output_file.write(pack('I', chip.subtype))
-
-        args.output_file.write(pack('I', chip.rev_num))
-
-        if _dt_version >= 3:
-            args.output_file.write(pack('4I',
-                                        chip.pmic_model0,
-                                        chip.pmic_model1,
-                                        chip.pmic_model2,
-                                        chip.pmic_model3))
-
-        indexed_dtb = next((item for item in dtb_ordered_list if chip.dtb_file in item.path), None)
-        if not indexed_dtb:
-            dtb = next((item for item in _dtb_list if chip.dtb_file in item.path), None)
-            if not dtb:
-                raise ValueError("DTB not found")
-
-            args.output_file.write(pack('I', expected))
-            args.output_file.write(pack('I', dtb.size))
-
-            dtb.offset = expected
-            expected += dtb.size
-
-            dtb_ordered_list.append(dtb)
-        else:
-            args.output_file.write(pack('I', indexed_dtb.offset))
-            args.output_file.write(pack('I', indexed_dtb.size))
-
-    # end of table indicator
-    args.output_file.write(pack('I', 0))
-
-    if padding > 0:
-        args.output_file.write(pack('%dx' % padding))
-
-    # Write DTBs
-    for dtb in dtb_ordered_list:
-        with open(dtb.path, "rb") as dtblob:
-            content = dtblob.read()
-        args.output_file.write(content)
-        padding = args.page_size - (len(content) % args.page_size)
-
-        size = len(content) + padding
-        if size != dtb.size:
-            raise ValueError("DTB size mismatch, please re-run: expected %d vs actual %d (%s)" %
-                             (dtb.size, size, dtb.path))
-
-        if padding > 0:
-            args.output_file.write(pack('%dx' % padding))
-
-    print("Completed")
+    print("Master DTB created")
 
 if __name__ == '__main__':
     main()
