@@ -55,4 +55,5 @@ It will generate a dtb image with the following structure:
 | PMIC3         | uint32   | fourth smallest SID of existing pmic             | v3 only          |
 | DTB Offset    | uint32   | byte offset from start/before MAGIC to DTB entry |                  |
 | DTB Size      | uint32   | size in bytes of DTB blob                        |                  |
+| Model         | 32B      | device model/codename                            | Motorola only    |
 

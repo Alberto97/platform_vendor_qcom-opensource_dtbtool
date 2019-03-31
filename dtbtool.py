@@ -32,6 +32,8 @@ QCDT_VERSION = 3       # QCDT version
 QCDT_DT_TAG = "qcom,msm-id = <"
 QCDT_BOARD_TAG = "qcom,board-id = <"
 QCDT_PMIC_TAG = "qcom,pmic-id = <"
+QCDT_MODEL_TAG = "model = \""
+QCDT_QCOM_MODEL_TAG = "qcom,model = \""
 
 
 PAGE_SIZE_DEF = 2048
@@ -62,6 +64,7 @@ class Chip(object):
         self.pmic_model2 = pmic_model2
         self.pmic_model3 = pmic_model3
         self.dtb_file = None
+        self.model = None
 
     @classmethod
     def create_v1(cls, chipset, platform, rev_num):
@@ -132,6 +135,10 @@ def get_chip_data(line, sublen):
 
     return retlist
 
+def get_model_data(line):
+    """Extracts model"""
+    return re.search('"(.+?)"', line.strip()).group(1)
+
 def get_chip_info(filename, msmversion, args):
     """Extracts chips infos in a sigle dtb image"""
     dts = get_dts_data(filename, args)
@@ -145,6 +152,7 @@ def get_chip_info(filename, msmversion, args):
     cr_data = []
     ps_data = []
     pmic_data = []
+    model = None
 
     # Extract data according to the dt version
     for line in dts.split("\n"):
@@ -160,6 +168,11 @@ def get_chip_info(filename, msmversion, args):
 
             if QCDT_PMIC_TAG in line:
                 pmic_data = get_chip_data(line, 4)
+
+            if (args.motorola and
+                    QCDT_MODEL_TAG in line and
+                    QCDT_QCOM_MODEL_TAG not in line):
+                model = get_model_data(line)
 
 
     if msmversion == 1:
@@ -187,6 +200,10 @@ def get_chip_info(filename, msmversion, args):
         print("... skip, incorrect '%s' format" % QCDT_PMIC_TAG)
         return None
 
+    if args.motorola and not model:
+        print("... skip, property '%s' not found" % QCDT_MODEL_TAG)
+        return None
+
     # Combine chipset, revision, platform, subtype and
     # pmic data to create unique chip entries
     for chipset_rev in cr_data:
@@ -196,10 +213,18 @@ def get_chip_info(filename, msmversion, args):
                     chip = Chip.create_v3(chipset_rev[0], chipset_rev[1],
                                           platform_subtype[0], platform_subtype[1],
                                           pmic[0], pmic[1], pmic[2], pmic[3])
+
+                    if args.motorola:
+                        chip.model = model
+
                     list_chip.append(chip)
             else:
                 chip = Chip.create_v2(chipset_rev[0], chipset_rev[1],
                                       platform_subtype[0], platform_subtype[1])
+
+                if args.motorola:
+                    chip.model = model
+
                 list_chip.append(chip)
 
     return list_chip
@@ -284,9 +309,15 @@ def process_dtb(entry_path, filename, args):
     _dtb_list.append(dtb)
 
     for chip in chiplist:
-        print("chipset: %u, rev: %u, platform: %u, subtype: %u, pmic0: %u, pmic1: %u, pmic2: %u, pmic3: %u" %
-              (chip.chipset, chip.rev_num, chip.platform, chip.subtype,
-               chip.pmic_model0, chip.pmic_model1, chip.pmic_model2, chip.pmic_model3))
+        if args.motorola:
+            print("chipset: %u, rev: %u, platform: %u, subtype: %u, pmic0: %u, pmic1: %u, pmic2: %u, pmic3: %u, model: %s" %
+                  (chip.chipset, chip.rev_num, chip.platform, chip.subtype,
+                   chip.pmic_model0, chip.pmic_model1, chip.pmic_model2, chip.pmic_model3,
+                   chip.model))
+        else:
+            print("chipset: %u, rev: %u, platform: %u, subtype: %u, pmic0: %u, pmic1: %u, pmic2: %u, pmic3: %u" %
+                  (chip.chipset, chip.rev_num, chip.platform, chip.subtype,
+                   chip.pmic_model0, chip.pmic_model1, chip.pmic_model2, chip.pmic_model3))
 
         # Add a reference to the DTB
         chip.dtb_file = filename
@@ -318,6 +349,8 @@ def parse_cmdline():
                         help="output dtb v2 format")
     parser.add_argument("-3", "--force-v3", action="store_true",
                         help="output dtb v3 format")
+    parser.add_argument("-m", "--motorola", default=0, type=int,
+                        help="Motorola dtb variant")
     return parser.parse_args()
 
 def validate_args(args):
@@ -417,6 +450,9 @@ def write_index_table(args, chip_list, dt_version, next_dtb_offset):
             args.output_file.write(pack('I', indexed_dtb.offset))
             args.output_file.write(pack('I', indexed_dtb.size))
 
+        if args.motorola:
+            args.output_file.write(pack('32s', chip.model))
+
     return dtb_ordered_list
 
 
@@ -457,6 +493,9 @@ def write_data(args, dtb_count):
     # Get entry size
     entry_size = get_entry_size(dt_version)
 
+    if args.motorola:
+        entry_size += 32
+
     # Calculate offset of first DTB block
     # header size + DTB table entries + end of table indicator
     dtb_offset = 12 + (entry_size * dtb_count) + 4
@@ -467,9 +506,14 @@ def write_data(args, dtb_count):
 
     print(" Writing header...")
 
+    if args.motorola:
+        hdr_version = (args.motorola << 8) | dt_version
+    else:
+        hdr_version = dt_version
+
     # Write the header
     args.output_file.write(pack('4s', QCDT_MAGIC.encode()))
-    args.output_file.write(pack('I', dt_version))
+    args.output_file.write(pack('I', hdr_version))
     args.output_file.write(pack('I', dtb_count))
 
     # Order chip list by chipset -> platform -> subtype -> rev_num

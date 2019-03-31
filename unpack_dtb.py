@@ -61,6 +61,10 @@ def unpack_dtb(args):
     version = header[0]
     dtb_count = header[1]
 
+    if args.motorola:
+        moto_version = args.motorola << 8
+        version = version - moto_version
+
     print('version: %s' % version)
     print('dtb_count: %s' % dtb_count)
 
@@ -91,6 +95,10 @@ def unpack_dtb(args):
         dtb_size = unpack('I', args.dtb.read(4))
         print(' dtb offset: %s dtb size: %s' % (dtb_offset[0], dtb_size[0]))
 
+        if args.motorola:
+            model = unpack('32s', args.dtb.read(32))
+            print(' model: %s' % model[0])
+
         if not args.print_only:
             name_suff = len(dtb_list) + 1
             dtb = Dtb('dtb_%d.dtb' % name_suff, dtb_size[0], dtb_offset[0])
@@ -114,6 +122,8 @@ def parse_cmdline():
     parser.add_argument('-p', '--print-only', action='store_true',
                         help='Only print the structure without extracting dtbs')
     parser.add_argument('-o', '--out', help='path to out dtbs', default='out')
+    parser.add_argument("-m", "--motorola", default=0, type=int,
+                        help="Motorola dtb variant")
     return parser.parse_args()
 
 def main():
